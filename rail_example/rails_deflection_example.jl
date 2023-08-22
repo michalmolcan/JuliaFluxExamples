@@ -22,12 +22,15 @@ test_data = (;
     targets = weights_test
 )
 
-plot(test_data.features[:,1:2])
+plot(test_data.features[:,1:1])
+xlabel!("Time [-]")
+ylabel!("Deflection [-]")
+title!("Test signal for car weight $(round(test_data.targets[1])) [-]")
 
 function loader(data=train_data; batchsize::Int=64)
     x4dim = reshape(data.features, size(train_data.features,1), 1, :)   # insert trivial channel dim
     y = reshape(data.targets, 1, :)
-    Flux.DataLoader((x4dim, y); batchsize, shuffle=true) |> gpu
+    Flux.DataLoader((x4dim, y); batchsize, shuffle=true)
 end
 
 x1, y1 = first(loader())
@@ -36,15 +39,15 @@ y1
 
 # Define the CNN model
 lenet = Chain(
-    Conv((5,), 1 => 7, relu, pad=2),
+    Conv((5,), 1 => 4, relu, pad=2),
     MaxPool((2,)),
-    Conv((5,), 7 => 14, relu, pad=2),
+    Conv((5,), 4 => 8, relu, pad=2),
     MaxPool((2,)),
-    Conv((5,), 14 => 28, relu, pad=2),
-    MaxPool((2,)),
+    # Conv((5,), 8 => 16, relu, pad=2),
+    # MaxPool((2,)),
     Flux.flatten,
-    Dense(448 => 128, relu),
-    Dense(128 => 64, relu),
+    # Dense(448 => 128, relu),
+    Dense(256 => 64, relu),
     Dense(64 => 16, relu),
     Dense(16 => 1)
 )
@@ -119,3 +122,4 @@ ddata[2]
 plot(((lenet(ddata[1]).-ddata[2])./ddata[2]*100)')
 xlabel!("Test measurement no [-]")
 ylabel!("Relative error [%]")
+title!("Relative error for test data")
