@@ -1,7 +1,7 @@
 # This file is used to train a neural network to predict the deflection of a rail
 
+using Flux, Zygote
 using Plots
-using Flux, Zygote, ChainPlots
 
 # obtain data
 include("synthetize_simple_data.jl")
@@ -95,3 +95,10 @@ end
 
 lenet(ddata[1])
 ddata[2]
+
+import StatsPlots: GroupedBar
+Plots.groupedbar(rand(10,3), bar_position = :dodge, bar_width=0.7)
+
+plot(((lenet(ddata[1]).-ddata[2])./ddata[2]*100)', label="Error")
+xlabel!("Measurement no [-]")
+ylabel!("Relative error [%]")

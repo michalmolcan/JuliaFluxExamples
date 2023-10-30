@@ -1,41 +1,46 @@
 # This file is used to train a neural network to predict the deflection of a rail
 
-using Plots
-using Flux, Zygote, ChainPlots
+using Flux, Zygote, Random
+using Statistics: mean
+using Plots, StatsPlots
 
-# obtain data
-include("synthetize_railroad_car_data.jl")
+# Random.seed!(666)
+n_train = 64
+n_test = 2048
+signal_length = 128
+weight_range = (20000.0, 75000.0)
 
-n_train = 512
-weights_train = rand(n_train)*75_000
-
-train_data = (;
-    features = reduce(hcat,[create_railroad_car_signal(w,128) for w in weights_train]),
-    targets = weights_train
+signal_parameters = (;
+    padding = 0.1,
+    noise_level_factor = 0.1, 
+    random_shift_factor = 0.1, 
+    random_outer_length_factor = 0.2,
+    random_truck_cerner_length_factor = 0.2,
+    random_axle_spacing_factor = 0.2
 )
 
-n_test = 32
-weights_test = rand(n_test)*75_000
+function plot_data(test_data)
+    plot(test_data.features[:,1:5])
+    xlabel!("Time [-]")
+    ylabel!("Deflection [-]")
+    title!("Test signal for car weight $(round(test_data.targets[1])) [-]")
+end
 
-test_data = (;
-    features = reduce(hcat,[create_railroad_car_signal(w,128) for w in weights_test]),
-    targets = weights_test
-)
+function plot_data_heatmap(train_data)
+    x = 1:size(train_data.features,1)
+    y = 1:size(train_data.features,2)
+    heatmap(x,y,train_data.features)
+end
 
-plot(test_data.features[:,1:1])
-xlabel!("Time [-]")
-ylabel!("Deflection [-]")
-title!("Test signal for car weight $(round(test_data.targets[1])) [-]")
-
-function loader(data=train_data; batchsize::Int=64)
-    x4dim = reshape(data.features, size(train_data.features,1), 1, :)   # insert trivial channel dim
+function loader(data; batchsize::Int=64)
+    x4dim = reshape(data.features, size(data.features,1), 1, :)   # insert trivial channel dim
     y = reshape(data.targets, 1, :)
     Flux.DataLoader((x4dim, y); batchsize, shuffle=true)
 end
 
-x1, y1 = first(loader())
-x1
-y1
+# obtain data
+include("../synthetize_data/synthetize_railroad_car_data.jl")
+test_data = create_rail_data(n_samples=n_test,weight_range=weight_range,signal_length=signal_length,signal_parameters=signal_parameters)
 
 # Define the CNN model
 lenet = Chain(
@@ -52,17 +57,11 @@ lenet = Chain(
     Dense(16 => 1)
 )
 
-lenet(x1) |> size
-
 # evaluate test data for visualization
 ddata = only(loader(test_data; batchsize=length(test_data.targets)))
 initial_values = lenet(ddata[1])  # just to force compilation
 
-using Statistics: mean  # standard library
-
-loader(test_data; batchsize=length(test_data.targets))
-
-function loss_and_accuracy(model, data=test_data)
+function loss_and_accuracy(model, data)
     (x, y) = only(loader(data; batchsize=length(data.targets)))  # make one big batch
 
     ŷ = model(x)
@@ -71,55 +70,56 @@ function loss_and_accuracy(model, data=test_data)
     (; loss, acc)  # return a NamedTuple
 end
 
-@show loss_and_accuracy(lenet);  #
-
-# Define the loss function
-# loss(x, y) = Flux.mse(lenet(x), y)
-
 settings = (;
     eta=3e-4,     # learning rate
     lambda=1e-2,  # for weight decay - to reduce complexity of the model [https://towardsdatascience.com/this-thing-called-weight-decay-a7cd4bcfccab]
-    batchsize=128,
-    epochs=100
+    batchsize=64,
+    epochs=500
 )
-train_log = []
 
 # Define the optimizer
 opt_rule = OptimiserChain(WeightDecay(settings.lambda), Adam(settings.eta))
 opt_state = Flux.setup(opt_rule, lenet);
 
-# Train the model
-for epoch in 1:settings.epochs
-    # @time will show a much longer time for the first epoch, due to compilation
-    @time for (x, y) in loader(batchsize=settings.batchsize)
-        grads = Flux.gradient(m -> Flux.mse(m(x), y), lenet)
-        Flux.update!(opt_state, lenet, grads[1])
+function train_nn(n_train)
+    # randomize initial random weights
+    rng = Random.seed!(666)
+    for p in Flux.params(lenet)
+        p .= Flux.glorot_normal(rng,size(p)...)
     end
+    
+    train_data = create_rail_data(n_samples=n_train,weight_range=weight_range,signal_length=signal_length,signal_parameters=signal_parameters)
+    train_log = []
+    # Train the model
+    for epoch in 1:settings.epochs
+        # @time will show a much longer time for the first epoch, due to compilation
+        for (x, y) in loader(train_data,batchsize=settings.batchsize)
+            grads = Flux.gradient(m -> Flux.mse(m(x), y), lenet)
+            Flux.update!(opt_state, lenet, grads[1])
+        end
 
-    # Logging & saving, but not on every epoch
-    if epoch % 2 == 1
         loss, acc = loss_and_accuracy(lenet, train_data)
-        test_loss, test_acc = loss_and_accuracy(lenet)
-        @info "logging:" epoch loss acc test_acc
-
-        nt = (; epoch, loss, acc, test_loss, test_acc)
-        push!(train_log, nt)
-    end
-
-    plt = plot(ddata[2]', label="True values")
-    plot!(plt, lenet(ddata[1])', linestyle=:dash, label="Predicted values")
-    plot!(plt, title="Epoch $epoch")
-    xlabel!(plt, "Measurement no [-]")
-    ylabel!(plt, "Weight [kg]")
-    display(plt)
-
-    # sleep(0.2)
+        test_loss, test_acc = loss_and_accuracy(lenet, test_data)
+        @info "logging:" n_train epoch loss acc test_acc
+    end 
+    relative_error = ((ddata[2].-lenet(ddata[1]))./ddata[2]*100)'
+    (n_train,maximum(abs.(relative_error)))
 end
 
-lenet(ddata[1])
-ddata[2]
+results = train_nn.([(2).^(2:7)...,256:128:1024...])
 
-plot(((lenet(ddata[1]).-ddata[2])./ddata[2]*100)')
-xlabel!("Test measurement no [-]")
-ylabel!("Relative error [%]")
-title!("Relative error for test data")
+plot(results)
+xlabel!("Number of training samples [-]")
+ylabel!("Maximum relative error [%]")
+
+# plot(((lenet(ddata[1]).-ddata[2])./ddata[2]*100)')
+# xlabel!("Test measurement no [-]")
+# ylabel!("Relative error [%]")
+# title!("Relative error for test data")
+
+
+
+
+# bar(((ddata[2].-lenet(ddata[1]))./ddata[2]*100)',label=false)
+# xlabel!("Measurement no [-]")
+# ylabel!("Relative error [%]")
