@@ -1,16 +1,14 @@
 # https://docs.sciml.ai/NeuralPDE/stable/tutorials/pdesystem/
 
-using NeuralPDE, Lux, Optimization, OptimizationOptimJL
+using NeuralPDE, Lux, Optimization
 import ModelingToolkit: Interval
 
-@parameters φ z
+@parameters z
 @variables p(..)
-Dφ = Differential(φ)
 Dz = Differential(z)
 Dzz = Differential(z)^2
 
 L, R, c0, η = 20e-3, 20e-3, 50e-6, 0.04
-p_a = 0.0
 
 ω = 2*π*20/60
 
@@ -20,29 +18,29 @@ p_a = 0.0
 u_1 = R*ω
 u_2 = 0.0
 
-h(φ) = c0 * (1 - ε * cos(φ - γ))
-dhdt(φ) = -c0 * (ε̇ * cos(φ - γ) + ε * γ̇ * sin(φ - γ))
+φ = 0.0
+h = c0 * (1 - ε * cos(φ - γ))
+dhdφ = c0 * ε * sin(φ - γ)
+dhdt = -c0 * (ε̇ * cos(φ - γ) + ε * γ̇ * sin(φ - γ))
+
+ff = 6 * η / R / h^3 * dhdφ * (u_1 + u_2) + 12 * η / h^3 * dhdt
 
 # 2D PDE
-eq = Dzz(p(φ, z)) ~ 6 * η / R / h(φ)^3 * Dφ(h(φ) * (u_1 + u_2)) + 12 * η / h(φ)^3 * dhdt(φ)
-# eq = Dzz(p(φ,z)) ~ 12*η/h(φ)^3*dhdt(φ)
+eq = Dzz(p(z)) - ff ~ 0.0
 
 # Boundary conditions
 bcs = [ 
-    p(φ, -L / 2) ~ p_a,
-    p(φ, L / 2) ~ p_a,
-    p(γ, 0) ~ 0.0,
-    Dz(p(φ, 0)) ~ 0.0,
-    # periodic boundary condition
-    p(2π, z) ~ p(0, z),
+    p(-L / 2) ~ 0.0,
+    p(L / 2) ~ 0.0,
+    Dz(p(0)) ~ 0.0,
 ]
 # Space and time domains
-domains = [ φ ∈ Interval(0.0, 2π),
-            z ∈ Interval(-L/2, L/2)]
+domains = [ z ∈ Interval(-L/2, L/2)]
 
 # Neural network
-dim = 2 # number of dimensions
+dim = 1 # number of dimensions
 # chain = Lux.Chain(Dense(dim, 128, Lux.σ), Dense(128, 32, Lux.σ), Dense(32, 32, Lux.σ), Dense(32, 1))
+
 chain = Lux.Chain(
     Dense(dim, 16, Lux.σ), 
     Dense(16, 16, Lux.σ), 
@@ -50,10 +48,11 @@ chain = Lux.Chain(
 )
 
 # Discretization
-dx = [2π/7, L/15]
-discretization = PhysicsInformedNN(chain, GridTraining(dx))
+dx = L/15
+strategy = GridTraining(dx)
+discretization = PhysicsInformedNN(chain, strategy)
 
-@named pde_system = PDESystem(eq, bcs, domains, [φ, z], [p(φ, z)])
+@named pde_system = PDESystem(eq, bcs, domains, [z], [p(z)])
 prob = discretize(pde_system, discretization)
 
 #Optimizer
@@ -65,28 +64,15 @@ callback = function (pp, l)
     return false
 end
 
-res = Optimization.solve(prob, opt, callback = callback, maxiters = 1000, reltol = 1e-12)
+res = Optimization.solve(prob, opt, callback = callback)
 phi = discretization.phi
 
 using Plots
 
-xs, ys = [infimum(d.domain):(ddx / 10):supremum(d.domain) for (d,ddx) in zip(domains,dx)]
-# analytic_sol_func(x, y) = (sin(pi * x) * sin(pi * y)) / (2pi^2)
+xs = [infimum(d.domain):(ddx / 10):supremum(d.domain) for (d,ddx) in zip(domains,dx)][1]
+u_predict = [first(phi(x, res.u)) for x in xs]
 
-u_predict = reshape([first(phi([x, y], res.u)) for x in xs for y in ys],
-                    (length(xs), length(ys)))
-# u_real = reshape([analytic_sol_func(x, y) for x in xs for y in ys],
-#                  (length(xs), length(ys)))
-# diff_u = abs.(u_predict .- u_real)
-
-# p1 = plot(xs, ys, u_real, linetype = :contourf, title = "analytic");
-# p3 = plot(xs, ys, diff_u, linetype = :contourf, title = "error");
-# plot(p2, p3)
-
-plot(xs, ys, u_predict', 
-    linetype = :contourf, 
+plot(xs, u_predict, 
     title = "Pressure distribution short bearing", 
-    xticks = (0:π/2:2π, ["0","π/2","π","3π/2","2π"]), 
-    yticks = (-L/2:L/4:L/2, ["-L/2","-L/4","0","L/4","L/2"]))
-xlabel!("φ")
-ylabel!("z")
+    xticks = (-L/2:L/4:L/2, ["-L/2","-L/4","0","L/4","L/2"]))
+xlabel!("z")

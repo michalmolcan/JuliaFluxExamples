@@ -28,7 +28,8 @@ eq = Dz(ρ*h(φ)^3/η *Dz(p(φ,z))) ~ 6/R*Dφ(h(φ)*(u_1 + u_2)) + 12*dhdt(φ)
 bcs = [ p(φ, -L/2) ~ 0.0,
         p(φ, L/2) ~ 0.0,
         Dz(p(φ, 0)) ~ 0.0,
-        p(γ, z) ~ 0.0]
+        p(γ, z) ~ 0.0,
+        p(2π,z) ~ p(0,z)]
 # Space and time domains
 domains = [ φ ∈ Interval(0.0, 2π),
             z ∈ Interval(-L/2, L/2)]
